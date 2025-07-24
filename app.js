@@ -9,12 +9,16 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // DB Connection
-const db = mysql.createConnection({
+const db = mysql.createPool({
   host: "localhost",
   user: "root",
   password: "",
   database: "iot_activation",
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
 });
+
 
 
 const bcrypt = require('bcryptjs');
@@ -24,7 +28,7 @@ const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || '88619d09c9896ce82f164d48a13765b2';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
-db.connect((err) => {
+((err) => {
   if (err) {
     console.error("❌ DB gagal terkoneksi:", err);
     process.exit(1);
