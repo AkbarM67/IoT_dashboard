@@ -1,6 +1,5 @@
 const express = require("express");
 const mysql = require("mysql2");
-const { activationPage } = require("./view");
 const app = express();
 const port = 3000;
 
@@ -27,6 +26,23 @@ const jwt = require('jsonwebtoken');
 // Ganti dengan secret key yang kuat dan simpan di environment variable (.env)
 const JWT_SECRET = process.env.JWT_SECRET || '88619d09c9896ce82f164d48a13765b2';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+  if (token == null) {
+    return res.status(401).json({ success: false, message: 'Akses ditolak. Token tidak ditemukan.' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ success: false, message: 'Token tidak valid atau sudah kedaluwarsa.' });
+    }
+    req.user = user; // Menyimpan data user dari token ke request
+    next();
+  });
+};
 
 ((err) => {
   if (err) {
@@ -57,8 +73,10 @@ function logEvent(eventType, actor, description, detailsObj) {
 }
 
 
+
+
 /* ========== ENDPOINT IoT AKTIVASI ========== */
-app.post("/activate", (req, res) => {
+app.post("/activate", authenticateToken  ,(req, res) => {
   const {
     device_configuration,
     wifi_configuration,
@@ -141,19 +159,19 @@ app.post("/activate", (req, res) => {
                 error: err3
               });
 
-            logEvent(
-              "Update Aktivasi",
-              owner,
-              `Perangkat ${deviceId} diupdate oleh ${owner}`,
-              {
-                deviceId,
-                deviceName,
-                owner,
-                endpointUrl,
-                operation: "UPDATE",
-                payload: req.body
-              }
-            );
+logEvent(
+  "Update Aktivasi",
+  req.user ? req.user.email : owner, // Use authenticated user's email if available
+  `Perangkat ${deviceId} diupdate oleh ${owner}`,
+  {
+    deviceId,
+    deviceName,
+    owner,
+    endpointUrl,
+    operation: "UPDATE",
+    payload: req.body,
+  }
+);
 
             return res.status(200).json({
               message: "Aktivasi diperbarui",
@@ -218,67 +236,75 @@ app.post("/activate", (req, res) => {
   );
 });
 
-app.get("/api/logs", (req, res) => {
+app.get("/api/logs", authenticateToken, (req, res) => {
   let page = parseInt(req.query.page) || 1;
   let limit = parseInt(req.query.limit) || 50;
   let offset = (page - 1) * limit;
 
-  // Hitung total log
-  db.query("SELECT COUNT(*) AS total FROM logs", (countErr, countResult) => {
-    if (countErr) {
-      return res.status(500).json({
-        success: false,
-        message: "Gagal menghitung total log",
-        error: countErr.message
-      });
-    }
+  // Get the authenticated user's email from the JWT payload
+  const userEmail = req.user.email; // Assuming the JWT payload contains the email
 
-    const totalLogs = countResult[0].total;
-    const totalPages = Math.ceil(totalLogs / limit);
-
-    // Ambil data log dengan pagination
-    const sql = `
-      SELECT 
-        id,
-        event_time,
-        event_type,
-        actor,
-        description,
-        details
-      FROM logs
-      ORDER BY event_time DESC
-      LIMIT ? OFFSET ?
-    `;
-
-    db.query(sql, [limit, offset], (err, results) => {
-      if (err) {
+  // Count total logs for the authenticated user
+  db.query(
+    "SELECT COUNT(*) AS total FROM logs WHERE actor = ?",
+    [userEmail],
+    (countErr, countResult) => {
+      if (countErr) {
         return res.status(500).json({
           success: false,
-          message: "Gagal mengambil data log",
-          error: err.message
+          message: "Gagal menghitung total log",
+          error: countErr.message,
         });
       }
 
-      res.json({
-        success: true,
-        message: "Data log berhasil diambil",
-        data: results.map(row => ({
-          id: row.id,
-          event_time: row.event_time,
-          event_type: row.event_type,
-          actor: row.actor,
-          description: row.description,
-          details: JSON.parse(row.details) // kirim full JSON detail
-        })),
-        pagination: {
-          current_page: page,
-          limit_per_page: limit,
-          total_logs: totalLogs,
-          total_pages: totalPages
+      const totalLogs = countResult[0].total;
+      const totalPages = Math.ceil(totalLogs / limit);
+
+      // Fetch logs for the authenticated user with pagination
+      const sql = `
+        SELECT 
+          id,
+          event_time,
+          event_type,
+          actor,
+          description,
+          details
+        FROM logs
+        WHERE actor = ?
+        ORDER BY event_time DESC
+        LIMIT ? OFFSET ?
+      `;
+
+      db.query(sql, [userEmail, limit, offset], (err, results) => {
+        if (err) {
+          return res.status(500).json({
+            success: false,
+            message: "Gagal mengambil data log",
+            error: err.message,
+          });
         }
+
+        res.json({
+          success: true,
+          message: "Data log berhasil diambil",
+          data: results.map((row) => ({
+            id: row.id,
+            event_time: row.event_time,
+            event_type: row.event_type,
+            actor: row.actor,
+            description: row.description,
+            details: JSON.parse(row.details), // Parse JSON details
+          })),
+          pagination: {
+            current_page: page,
+            limit_per_page: limit,
+            total_logs: totalLogs,
+            total_pages: totalPages,
+          },
+        });
       });
-    });
-  });
+    }
+  );
 });
 
 app.get("/api/config/:mac", (req, res) => {
@@ -776,23 +802,6 @@ app.get("/api/activations", (req, res) => {
   });
 });
 
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
-
-  if (token == null) {
-    return res.status(401).json({ success: false, message: 'Akses ditolak. Token tidak ditemukan.' });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({ success: false, message: 'Token tidak valid atau sudah kedaluwarsa.' });
-    }
-    req.user = user; // Menyimpan data user dari token ke request
-    next();
-  });
-};
-
 
 // Endpoint: POST /api/auth/register
 app.post("/api/auth/register", async (req, res) => {
@@ -972,8 +981,12 @@ app.post("/api/register-device", (req, res) => {
             return res.status(500).json({ success: false, message: "Gagal registrasi perangkat", error: updateErr.message });
           }
 
-          logEvent("Registrasi Perangkat", owner, `Serial ${serial_number} berhasil diregistrasi`, { serial_number, owner });
-
+logEvent(
+  "Registrasi Perangkat",
+  req.user ? req.user.email : owner, // Use authenticated user's email if available
+  `Serial ${serial_number} berhasil diregistrasi`,
+  { serial_number, owner }
+);
           return res.status(200).json({
             success: true,
             message: "Perangkat berhasil diregistrasi",
