@@ -937,6 +937,171 @@ app.post("/api/auth/login", (req, res) => {
   });
 });
 
+// Endpoint: PUT /api/auth/profile
+app.put("/api/auth/profile", authenticateToken, async (req, res) => {
+  const { full_name, email } = req.body;
+  const userId = req.user.id; // Ambil ID pengguna dari JWT payload
+
+  // Validasi input
+  if (!full_name || !email) {
+    return res.status(400).json({
+      success: false,
+      message: "Nama lengkap dan email wajib diisi.",
+    });
+  }
+
+  try {
+    // Cek apakah email sudah digunakan oleh pengguna lain
+    const [existingEmail] = await db.promise().query(
+      "SELECT id FROM users WHERE email = ? AND id != ?",
+      [email, userId]
+    );
+
+    if (existingEmail.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "Email sudah digunakan oleh pengguna lain.",
+      });
+    }
+
+    // Update data pengguna
+    const sql = `
+      UPDATE users 
+      SET full_name = ?, email = ?, updated_at = NOW()
+      WHERE id = ?
+    `;
+    const [result] = await db.promise().query(sql, [full_name, email, userId]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Pengguna tidak ditemukan.",
+      });
+    }
+
+    // Ambil data pengguna yang diperbarui (tanpa password)
+    const [updatedUser] = await db.promise().query(
+      "SELECT id, full_name, email, created_at, updated_at FROM users WHERE id = ?",
+      [userId]
+    );
+
+    // Catat log
+    logEvent(
+      "Update Profile",
+      req.user.email,
+      `Pengguna ${req.user.email} memperbarui profil`,
+      { userId, full_name, email }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Profil berhasil diupdate",
+      data: { user: updatedUser[0] },
+    });
+  } catch (err) {
+    logEvent(
+      "Update Profile Error",
+      req.user.email,
+      "Gagal memperbarui profil",
+      { error: err.message }
+    );
+    return res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan server: " + err.message,
+    });
+  }
+});
+
+// Endpoint: PUT /api/auth/change-password
+app.put("/api/auth/change-password", authenticateToken, async (req, res) => {
+  const { current_password, new_password, confirm_password } = req.body;
+  const userId = req.user.id; // Ambil ID pengguna dari JWT payload
+
+  // Validasi input
+  if (!current_password || !new_password || !confirm_password) {
+    return res.status(400).json({
+      success: false,
+      message: "Password saat ini, password baru, dan konfirmasi password wajib diisi.",
+    });
+  }
+
+  if (new_password !== confirm_password) {
+    return res.status(400).json({
+      success: false,
+      message: "Password baru dan konfirmasi password tidak cocok.",
+    });
+  }
+
+  try {
+    // Ambil data pengguna
+    const [users] = await db.promise().query(
+      "SELECT password FROM users WHERE id = ?",
+      [userId]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Pengguna tidak ditemukan.",
+      });
+    }
+
+    const user = users[0];
+
+    // Verifikasi password saat ini
+    const isMatch = await bcrypt.compare(current_password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Password saat ini salah.",
+      });
+    }
+
+    // Hash password baru
+    const saltRounds = 12;
+    const hashedNewPassword = await bcrypt.hash(new_password, saltRounds);
+
+    // Update password
+    const sql = `
+      UPDATE users 
+      SET password = ?, updated_at = NOW()
+      WHERE id = ?
+    `;
+    const [result] = await db.promise().query(sql, [hashedNewPassword, userId]);
+
+    if (result.affectedRows === 0) {
+      return res.status(500).json({
+        success: false,
+        message: "Gagal memperbarui password.",
+      });
+    }
+
+    // Catat log
+    logEvent(
+      "Change Password",
+      req.user.email,
+      `Pengguna ${req.user.email} mengubah password`,
+      { userId }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Password berhasil diubah",
+    });
+  } catch (err) {
+    logEvent(
+      "Change Password Error",
+      req.user.email,
+      "Gagal mengubah password",
+      { error: err.message }
+    );
+    return res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan server: " + err.message,
+    });
+  }
+});
+
 
 app.post("/api/register-device", (req, res) => {
   const { serial_number, owner } = req.body;
