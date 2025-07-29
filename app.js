@@ -569,6 +569,7 @@ app.get("/manage-users", (req, res) => {
                     <th class="px-4 py-3">MAC Address</th>
                     <th class="px-4 py-3">Registered By</th>
                     <th class="px-4 py-3">Status</th>
+                    <th class="px-4 py-3">Serial Number</th>
                     <th class="px-4 py-3">Activation Date</th>
                     <th class="px-4 py-3 text-center">Aksi</th>
                   </tr>
@@ -593,6 +594,7 @@ app.get("/manage-users", (req, res) => {
                     <th class="px-4 py-3">Nama Lengkap</th>
                     <th class="px-4 py-3">Email</th>
                     <th class="px-4 py-3">Status</th>
+                    <th class="px-4 py-3">Serial Number</th>
                     <th class="px-4 py-3">Dibuat</th>
                     <th class="px-4 py-3 text-center">Aksi</th>
                   </tr>
@@ -675,10 +677,8 @@ app.get("/manage-users", (req, res) => {
                             ? \`<span class="px-2 py-1 font-semibold leading-tight text-green-700 bg-green-100 rounded-full">Aktif</span>\`
                             : \`<span class="px-2 py-1 font-semibold leading-tight text-red-700 bg-red-100 rounded-full">Nonaktif</span>\`;
                         
-                        const deleteButton = row.is_registered
-                            ? \`<button onclick="deleteActivation('\${row.mac_address}', '\${row.device_id}')" class="bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-3 py-1.5 rounded-md shadow-sm">Hapus</button>\`
-                            : '';
-
+                        const deleteButton = \`<button onclick="deleteActivation('\${row.mac_address}', '\${row.device_id}')" class="bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-3 py-1.5 rounded-md shadow-sm">Hapus</button>\`;
+                        const serialNumber = row.serial_number || '<span class="text-slate-400">Belum Tersedia</span>';
                         const tr = document.createElement('tr');
                         tr.className = 'hover:bg-slate-50';
                         tr.innerHTML = \`
@@ -686,6 +686,7 @@ app.get("/manage-users", (req, res) => {
                             <td class="px-4 py-3 font-mono text-xs">\${row.mac_address}</td>
                             <td class="px-4 py-3 whitespace-nowrap">\${row.registered_by || '<span class="text-slate-400">Belum Terdaftar</span>'}</td>
                             <td class="px-4 py-3">\${statusBadge}</td>
+                            <td class="px-4 py-3 font-mono text-xs">\${serialNumber}</td>
                             <td class="px-4 py-3 text-xs whitespace-nowrap">\${row.activation_date_formatted || '-'}</td>
                             <td class="px-4 py-3 text-center">\${deleteButton}</td>
                         \`;
@@ -1352,16 +1353,16 @@ app.post("/api/device/register", authenticateToken, (req, res) => {
   });
 });
 
-/* ========== ENDPOINT UNTUK HAPUS/RESET AKTIVASI ========== */
+/* ========== ENDPOINT UNTUK HAPUS/RESET AKTIVASI (REVISED) ========== */
 app.delete("/api/activations/:macAddress", authenticateToken, (req, res) => {
-  const userEmail = req.user.email;
-  const { macAddress } = req.params; // Ambil MAC address dari parameter URL
+  const userEmail = req.user.email; // Kita tetap simpan untuk logging
+  const { macAddress } = req.params;
 
   if (!macAddress) {
     return res.status(400).json({ success: false, message: "MAC Address wajib diisi." });
   }
 
-  // 1. Verifikasi bahwa perangkat ada dan dimiliki oleh pengguna yang meminta
+  // 1. Verifikasi bahwa perangkat ada di database
   db.query("SELECT * FROM activations WHERE mac_address = ?", [macAddress], (err, results) => {
     if (err) {
       logEvent('DeleteActivation Error', userEmail, `DB error saat mencari MAC ${macAddress}`, { error: err.message });
@@ -1372,34 +1373,18 @@ app.delete("/api/activations/:macAddress", authenticateToken, (req, res) => {
       return res.status(404).json({ success: false, message: "Perangkat tidak ditemukan." });
     }
 
-    const device = results[0];
+    // BLOK VALIDASI KEPEMILIKAN DIHAPUS DARI SINI
+    // Sekarang, setiap pengguna yang terotentikasi bisa melanjutkan
 
-    // PENTING: Hanya pengguna yang mendaftarkan yang boleh menghapus
-    if (device.registered_by !== userEmail) {
-      logEvent('DeleteActivation Forbidden', userEmail, `Percobaan hapus MAC ${macAddress} oleh pengguna yang tidak sah`, { owner: device.registered_by });
-      return res.status(403).json({ success: false, message: "Akses ditolak. Anda bukan pemilik perangkat ini." });
-    }
-
-    // 2. Lakukan "Soft Delete" dengan mereset kolom-kolom penting
+    // 2. Lakukan "Soft Delete"
     const sql = `
       UPDATE activations 
       SET 
-        owner = NULL,
-        author = NULL,
-        device_name = NULL,
-        manufacturer = NULL,
-        mikro_type = NULL,
-        firmware_version = NULL,
-        firmware_description = NULL,
-        wifi_ssid = NULL,
-        wifi_password = NULL,
-        activation_date = NULL,
-        deactivation_date = NULL,
-        endpoint_url = NULL,
-        io_pin = NULL,
-        is_registered = 0,
-        registered_by = NULL,
-        registered_at = NULL
+        owner = NULL, author = NULL, device_name = NULL, manufacturer = NULL,
+        mikro_type = NULL, firmware_version = NULL, firmware_description = NULL,
+        wifi_ssid = NULL, wifi_password = NULL, activation_date = NULL,
+        deactivation_date = NULL, endpoint_url = NULL, io_pin = NULL,
+        is_registered = 0, registered_by = NULL, registered_at = NULL
       WHERE mac_address = ?
     `;
 
@@ -1410,7 +1395,8 @@ app.delete("/api/activations/:macAddress", authenticateToken, (req, res) => {
         return res.status(500).json({ success: false, message: "Gagal mereset aktivasi." });
       }
 
-      logEvent("Activation Deleted", userEmail, `Pengguna mereset aktivasi untuk MAC ${macAddress}`, { macAddress });
+      // Log tetap mencatat SIAPA yang menghapus, ini penting untuk audit
+      logEvent("Activation Deleted", userEmail, `Pengguna ${userEmail} mereset aktivasi untuk MAC ${macAddress}`, { macAddress });
       res.status(200).json({ success: true, message: "Aktivasi berhasil dihapus/direset." });
     });
   });
