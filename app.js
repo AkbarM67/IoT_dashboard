@@ -752,10 +752,13 @@ app.get("/manage-users", (req, res) => {
                     \`;
                   }
                 }
-                const statusBadge =
-                  row.status === "Aktif"
-                    ? \`<span class="px-2 py-1 font-semibold leading-tight text-green-700 bg-green-100 rounded-full">Aktif</span>\`
-                    : \`<span class="px-2 py-1 font-semibold leading-tight text-red-700 bg-red-100 rounded-full">Nonaktif</span>\`;
+                const currentDate = new Date();
+                const activationDate = row.activation_date ? new Date(row.activation_date) : null;
+                const deactivationDate = row.deactivation_date ? new Date(row.deactivation_date) : null;
+                const isActive = activationDate && currentDate >= activationDate && (!deactivationDate || currentDate <= deactivationDate);
+                const statusBadge = isActive
+                  ? \`<span class="px-2 py-1 font-semibold leading-tight text-green-700 bg-green-100 rounded-full">Aktif</span>\`
+                  : \`<span class="px-2 py-1 font-semibold leading-tight text-red-700 bg-red-100 rounded-full">Nonaktif</span>\`;
                 const deleteButton = \`<button onclick="deleteActivation('\${row.mac_address}', '\${row.device_id}')" class="bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-3 py-1.5 rounded-md shadow-sm">Hapus</button>\`;
                 const serialNumber = row.serial_number || '<span class="text-slate-400">Belum Tersedia</span>';
                 const tr = document.createElement("tr");
