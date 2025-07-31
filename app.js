@@ -1338,10 +1338,10 @@ app.get("/api/config/:mac", (req, res) => {
 });
 
 app.post("/api/device/check-registered-email", authenticateToken, (req, res) => {
-  const { email, device_id } = req.body;
+  const { email, mac_address } = req.body;
   const userEmail = req.user.email;
 
-  if (!email || !device_id) {
+  if (!email || !mac_address) {
     return res.status(400).json({
       success: false,
       message: "Email dan Device ID wajib diisi.",
@@ -1357,8 +1357,8 @@ app.post("/api/device/check-registered-email", authenticateToken, (req, res) => 
   }
 
   db.query(
-    "SELECT registered_by, is_registered FROM activations WHERE device_id = ?",
-    [device_id],
+    "SELECT registered_by, is_registered FROM activations WHERE mac_address = ?",
+    [mac_address],
     (err, results) => {
       if (err) {
         logEvent(
