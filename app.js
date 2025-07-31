@@ -1337,6 +1337,77 @@ app.get("/api/config/:mac", (req, res) => {
   });
 });
 
+app.post("/api/device/check-registered-email", authenticateToken, (req, res) => {
+  const { email, device_id } = req.body;
+  const userEmail = req.user.email;
+
+  if (!email || !device_id) {
+    return res.status(400).json({
+      success: false,
+      message: "Email dan Device ID wajib diisi.",
+    });
+  }
+
+  // Ensure the requesting user is checking their own email
+  if (email !== userEmail) {
+    return res.status(403).json({
+      success: false,
+      message: "Anda hanya dapat memeriksa email Anda sendiri.",
+    });
+  }
+
+  db.query(
+    "SELECT registered_by, is_registered FROM activations WHERE device_id = ?",
+    [device_id],
+    (err, results) => {
+      if (err) {
+        logEvent(
+          "Check Registered Email Error",
+          userEmail,
+          `DB error saat memeriksa email untuk device ${device_id}`,
+          { error: err.message }
+        );
+        return res.status(500).json({
+          success: false,
+          message: "Kesalahan pada server.",
+          error: err.message,
+        });
+      }
+
+      if (results.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Perangkat tidak ditemukan.",
+        });
+      }
+
+      const device = results[0];
+      const isMatch = device.is_registered && device.registered_by === email;
+
+      logEvent(
+        "Check Registered Email",
+        userEmail,
+        `Memerik Commissions: 0.5% inikan email untuk device ${device_id}: ${isMatch ? "cocok" : "tidak cocok"}`,
+        { device_id, email, is_registered: device.is_registered }
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: isMatch
+          ? "Email cocok dengan pendaftar perangkat."
+          : device.is_registered
+          ? "Email tidak cocok dengan pendaftar perangkat."
+          : "Perangkat belum didaftarkan.",
+        data: {
+          isMatch,
+          is_registered: device.is_registered,
+          registered_by: device.registered_by || null,
+        },
+      });
+    }
+  );
+});
+
 app.post("/api/device/register", authenticateToken, (req, res) => {
   const userEmail = req.user.email;
   const { mac_address, serial_number } = req.body;
